@@ -1,0 +1,82 @@
+!pip -q install ucimlrepo scikit-learn
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from ucimlrepo import fetch_ucirepo
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import
+mean_absolute_error, mean_squared_error, r2_score
+dataset = fetch_ucirepo(id=492)
+df = dataset.data.features.copy()
+df["traffic_volume"] = dataset.data.targets["traffic_volume"].values
+df["date_time"] = pd.to_datetime(df["date_time"])
+df = df.sort_values("date_time")
+df = df.drop_duplicates(subset="date_time").reset_index(drop=True)
+print("Dataset shape before reindexing:", df.shape)
+full_hourly_range = pd.date_range(start=df["date_time"].min(), end=df["date_time"].max(), freq="h")
+df = df.set_index("date_time").reindex(full_hourly_range)
+df["traffic_volume"] = df["traffic_volume"].interpolate(method="linear")
+df["temp"] = df["temp"].interpolate(method="linear")
+df["rain_1h"] = df["rain_1h"].fillna(0)
+df["snow_1h"] = df["snow_1h"].fillna(0)
+df["clouds_all"] = df["clouds_all"].interpolate(method="linear")
+df = df.reset_index().rename(columns={"index": "date_time"})
+print("Dataset shape after forcing continuous hourly timeline:", df.shape)
+data = df.iloc[:2000].copy()
+print("\nSelected records:", len(data))
+print("Start:", data["date_time"].iloc[0])
+print("End:", data["date_time"].iloc[-1])
+data["hour"] = data["date_time"].dt.hour
+data["day_of_week"] = data["date_time"].dt.dayofweek
+data["month"] = data["date_time"].dt.month
+data["is_weekend"] = (data["day_of_week"] >= 5).astype(int)
+features = [
+    "hour", "day_of_week", "month", "is_weekend",
+    "temp", "rain_1h", "snow_1h", "clouds_all"
+]
+X = data[features]
+y = data["traffic_volume"]
+split = int(len(data) * 0.8)
+X_train, X_test = X.iloc[:split], X.iloc[split:]
+y_train, y_test = y.iloc[:split], y.iloc[split:]
+model = RandomForestRegressor(
+    n_estimators=100,
+    random_state=42,
+    n_jobs=-1
+)
+model.fit(X_train, y_train)
+y_pred = model.predict(X_test)
+mae = mean_absolute_error(y_test, y_pred)
+rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+r2 = r2_score(y_test, y_pred)
+print("\nModel Evaluation")
+print("MAE:", round(mae, 2))
+print("RMSE:", round(rmse, 2))
+print("R2 Score:", round(r2, 4))
+
+# 9. Visualize actual vs predicted traffic
+plt.figure(figsize=(14, 5))
+plt.plot(y_test.values, label="Actual Traffic", linewidth=2)
+plt.plot(y_pred, label="Predicted Traffic", linewidth=2)
+plt.title("Hourly Traffic Volume Forecasting")
+plt.xlabel("Test Hour")
+plt.ylabel("Traffic Volume (vehicles/hour)")
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+hourly_traffic = data.groupby("hour")["traffic_volume"].mean()
+plt.figure(figsize=(10, 5))
+hourly_traffic.plot(kind="bar", color="steelblue")
+plt.title("Average Traffic Volume by Hour")
+plt.xlabel("Hour of Day")
+plt.ylabel("Average Traffic Volume")
+plt.tight_layout()
+plt.show()
+results = pd.DataFrame({
+    "Date_Time": data["date_time"].iloc[split:].values,
+    "Actual_Traffic": y_test.values,
+    "Predicted_Traffic": np.round(y_pred).astype(int)
+})
+print("\nSample Predictions:")
+print(results.head(10))
